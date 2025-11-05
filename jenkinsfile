@@ -3,7 +3,7 @@ pipeline {
   environment {
     IMAGE="php-holamundo:${env.BUILD_NUMBER}"
     CONTAINER="php-hm-${env.BUILD_NUMBER}"
-    PORT="8080"
+    PORT="8090"
   }
   stages {
     stage('Checkout') {
