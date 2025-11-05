@@ -1,38 +1,69 @@
 pipeline {
   agent any
   environment {
-    IMAGE="php-holamundo:${env.BUILD_NUMBER}"
-    CONTAINER="php-hm-${env.BUILD_NUMBER}"
-    PORT="8090"
+    PORT = "8085"          // cambia si está ocupado
+    PID_FILE = ".php.pid"
   }
+  options { timestamps() }
+
   stages {
-    stage('Checkout') {
-      steps {
-        git branch: 'main', url: 'https://github.com/mslanger/php'
-      }
-    }
-    stage('Build') {
-      steps { sh 'docker build -t "$IMAGE" .' }
-    }
-    stage('Run') {
+    stage('Preparar Hola Mundo') {
       steps {
         sh '''
-          docker rm -f "$CONTAINER" 2>/dev/null || true
-          docker run -d --name "$CONTAINER" -p ${PORT}:80 "$IMAGE"
+          set -e
+          echo "<?php echo '¡Hola Mundo desde PHP!'; ?>" > index.php
         '''
       }
     }
-    stage('Test') {
+
+    stage('Levantar server y mostrar URL') {
       steps {
         sh '''
-          i=0
-          until curl -fsS "http://localhost:${PORT}/hola_mundo.php" >/dev/null; do
-            i=$((i+1)); [ "$i" -ge 20 ] && exit 1; sleep 1
+          set -eux
+
+          # Cerrar instancia previa si existiera
+          [ -f "${PID_FILE}" ] && kill "$(cat ${PID_FILE})" 2>/dev/null || true
+
+          # IP del agente (primera IPv4 no loopback)
+          IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
+          if [ -z "$IP" ]; then
+            IP="$(ip -4 addr show | awk '/inet/{print $2}' | cut -d/ -f1 | grep -v '^127\\.' | head -n1)"
+          fi
+          [ -z "$IP" ] && IP="(IP-del-agente)"
+
+          # Levantar servidor accesible por red
+          nohup php -S 0.0.0.0:${PORT} -t . > /tmp/php-server.log 2>&1 &
+          echo $! > "${PID_FILE}"
+
+          echo "==============================================="
+          echo " Abre en tu navegador:  http://${IP}:${PORT}/"
+          echo " (desde tu PC debes usar la IP del AGENTE, no localhost)"
+          echo " Mantendré el server activo por 5 minutos..."
+          echo "==============================================="
+
+          # Espera a que responda
+          for i in $(seq 1 30); do
+            curl -fsS "http://127.0.0.1:${PORT}/" >/dev/null && break || sleep 1
           done
-          curl -fsS "http://localhost:${PORT}/hola_mundo.php" | grep -i "hola"
+
+          # Smoke test
+          curl -fsS "http://127.0.0.1:${PORT}/" | grep -i "hola mundo"
+
+          # Mantener vivo 5 minutos para que puedas probarlo
+          sleep 300
         '''
       }
     }
   }
-  post { always { sh 'docker rm -f "$CONTAINER" 2>/dev/null || true' } }
+
+  post {
+    always {
+      sh '''
+        echo "---- últimos logs ----"
+        tail -n 50 /tmp/php-server.log || true
+        [ -f "${PID_FILE}" ] && kill "$(cat ${PID_FILE})" 2>/dev/null || true
+        rm -f "${PID_FILE}" || true
+      '''
+    }
+  }
 }
